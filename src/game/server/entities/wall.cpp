@@ -34,7 +34,6 @@ bool CWall::HitCharacter(vec2 From, vec2 To, CCharacter *pCharacter) {
 void CWall::Tick() {
     m_Active = true;
     if (!GameServer()->m_apPlayers[m_Owner]) {
-        Reset();
         return;
     } else if (GameServer()->m_apPlayers[m_Owner]->GetTeam() == TEAM_SPECTATORS ||
                GameServer()->m_apPlayers[m_Owner]->Infected() ||
