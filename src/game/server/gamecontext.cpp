@@ -722,6 +722,7 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 				return;
 
 			pPlayer->m_LastChat = Server()->Tick();
+			
 			if(pMsg->m_pMessage[0] == '/')
             {
                 ExecuteCommand(ClientID, pMsg->m_pMessage);
