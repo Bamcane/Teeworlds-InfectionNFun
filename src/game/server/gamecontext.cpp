@@ -722,8 +722,10 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 				return;
 
 			pPlayer->m_LastChat = Server()->Tick();
-
-			ExecuteCommand(ClientID,pMsg->m_pMessage);
+			if(pMsg->m_pMessage[0] == '/')
+            {
+                ExecuteCommand(ClientID, pMsg->m_pMessage);
+            }
 		}
 		else if(MsgID == NETMSGTYPE_CL_CALLVOTE)
 		{
