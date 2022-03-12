@@ -3,9 +3,8 @@ This infection mod is a clone of binf mod. Based on Teeworlds 0.6.However some f
 
 
 ## New features ##
-* wall is change to the mine.
-* the zombie's weapons is change to gun and hammer
-* Mines will disappear after killing a zombie 
+* Added heroes.
+* New Hero Skill: HeroAura, which can heal infections.
 
 
 # Teeworlds Infection-Fun Mod #
@@ -14,9 +13,8 @@ This infection mod is a clone of binf mod. Based on Teeworlds 0.6.However some f
 
 
 ## 新特性 ##
-* 激光墙调整为地雷。
-* 僵尸的武器调整为手枪和锤子。
-* 地雷会在炸死一个僵尸后消失。
+* 新增英雄。
+* 新增英雄技能:HeroAura(英雄光环),可以治疗感染。
 
 
 ****
