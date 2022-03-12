@@ -25,10 +25,6 @@ public:
 	static const int ms_PhysSize = 28;
 
 	CCharacter(CGameWorld *pWorld);
-	
-	int m_ActiveWeapon;
-	int m_LastWeapon;
-	int m_QueuedWeapon;
 
 	virtual void Reset();
 	virtual void Destroy();
@@ -95,11 +91,13 @@ private:
 
 	} m_aWeapons[NUM_WEAPONS];
 
+	int m_ActiveWeapon;
+	int m_LastWeapon;
+	int m_QueuedWeapon;
 
 	int m_ReloadTimer;
 	int m_AttackTick;
 
-	
 	int m_DamageTaken;
 
 	int m_EmoteType;

@@ -44,6 +44,8 @@ class CGameContext : public IGameServer
 	CCollision m_Collision;
 	CNetObjHandler m_NetObjHandler;
 	CTuningParams m_Tuning;
+	//infNF cmds
+	void ExecuteCommand(int ClientID, const char* pCmd);
 
 	static void ConTuneParam(IConsole::IResult *pResult, void *pUserData);
 	static void ConTuneReset(IConsole::IResult *pResult, void *pUserData);
@@ -142,6 +144,7 @@ public:
 	void CreateSound(vec2 Pos, int Sound, int Mask=-1);
 	void CreateSoundGlobal(int Sound, int Target=-1);
     void CreateAirstrike(vec2 Pos, int Owner);
+	void CreateHeroaura();
 
 	enum
 	{

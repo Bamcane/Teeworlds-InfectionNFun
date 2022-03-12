@@ -1,13 +1,14 @@
 /* (c) Magnus Auvinen. See licence.txt in the root of the distribution for more information. */
 /* If you are missing that file, acquire a complete release at teeworlds.com.                */
 #include <engine/shared/config.h>
+#include "gamecontroller.h"
+#include "gamecontext.h"
 #include <game/mapitems.h>
 
 #include <game/generated/protocol.h>
 
 #include "entities/pickup.h"
-#include "gamecontroller.h"
-#include "gamecontext.h"
+
 
 
 IGameController::IGameController(class CGameContext *pGameServer)
@@ -269,6 +270,38 @@ int IGameController::PickZombie() {
     return -1;
 }
 
+int IGameController::PickHero(int thehero) {
+    for (int i = 0; i < MAX_CLIENTS; i ++) {
+        CPlayer *pPlayer = GameServer()->m_apPlayers[m_NextZombie];
+		if(m_NextHero == -1)
+		{
+        	if (!pPlayer) {
+        		if (++ m_NextHero >= MAX_CLIENTS)
+                	m_NextHero = 0;
+            	continue;
+        	}
+
+        	if (pPlayer->GetTeam() == TEAM_SPECTATORS) {
+            	if (++ m_NextHero >= MAX_CLIENTS)
+                	m_NextHero = 0;
+            	continue;
+			}
+        }else
+		{
+			m_NextHero = thehero;
+		}
+
+        int id = m_NextHero;
+        pPlayer->Heronow();
+        pPlayer->m_Zombie = CPlayer::HUMAN;
+		pPlayer->m_hero = CPlayer::HERO;
+        if (++ m_NextHero >= MAX_CLIENTS)
+            m_NextHero = 0;
+        return id;
+    }
+    return -1;
+}
+
 void IGameController::CycleMap()
 {
 	if(m_aMapWish[0] != 0)
@@ -293,10 +326,10 @@ void IGameController::CycleMap()
 
 	// handle maprotation
 	const char *pMapRotation = g_Config.m_SvMaprotation;
+	const char *pNextMap = pMapRotation;
 	const char *pCurrentMap = g_Config.m_SvMap;
 
 	int CurrentMapLen = str_length(pCurrentMap);
-	const char *pNextMap = pMapRotation;
 	while(*pNextMap)
 	{
 		int WordLen = 0;
@@ -369,7 +402,23 @@ void IGameController::OnPlayerInfoChange(class CPlayer *pP)
 
 int IGameController::OnCharacterDeath(class CCharacter *pVictim, class CPlayer *pKiller, int Weapon)
 {
-	// do scoreing
+	int i,j;
+	for(i = 0;i<=MAX_CLIENTS;i++)
+	{
+		if(GameServer()->m_apPlayers[i]->Heroed())break;
+		if(i==MAX_CLIENTS)
+		{
+			for(j = 0;j<=MAX_CLIENTS;j++)
+			{
+				if(!GameServer()->m_apPlayers[j]->Infected())
+				{
+					PickHero(j);
+				}
+				
+			}
+		}
+	}
+	
 	if(!pKiller || Weapon == WEAPON_GAME)
 		return 0;
 	if(pKiller == pVictim->GetPlayer())
@@ -443,6 +492,7 @@ void IGameController::Tick()
 		m_Warmup--;
 		if(!m_Warmup)
 			PickZombie();
+			PickHero();
 	}
 
 	if(m_GameOverTick != -1)

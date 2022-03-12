@@ -9,9 +9,10 @@
 
 CGameControllerInfection::CGameControllerInfection(class CGameContext *pGameServer)
 : IGameController(pGameServer) {
-	m_pGameType = "Infection";
+	m_pGameType = "InfNF";
 	m_BroadcastTime = 0;
 	m_NextZombie = 0;
+    m_NextHero = -1;
 }
 
 void CGameControllerInfection::DoWincheck() {
@@ -26,14 +27,14 @@ void CGameControllerInfection::DoWincheck() {
 
         if (pPlayer->Infected())
             Zombies ++;
-        else
+        else 
             Humans ++;
     }
 
     if (Humans + Zombies < 2) {
         m_SuddenDeath = true;
         m_Warmup = 0;
-        GameServer()->SendBroadcast("需要至少2名玩家才能开始游戏", -1);
+        GameServer()->SendBroadcast("At least 2 players required to start playing", -1);
         return;
     } else if (m_SuddenDeath) {
         StartRound();
@@ -52,7 +53,6 @@ void CGameControllerInfection::DoWincheck() {
 void CGameControllerInfection::OnCharacterSpawn(CCharacter *pChr) {
     pChr->IncreaseHealth(10);
     pChr->GiveWeapon(WEAPON_HAMMER, -1);
-    pChr->GiveWeapon(WEAPON_GUN, -1);
     if (pChr->GetPlayer()->Infected())
         pChr->SetWeapon(WEAPON_HAMMER);
     else
@@ -90,16 +90,25 @@ int CGameControllerInfection::OnCharacterDeath(CCharacter *pVictim, CPlayer *pKi
         if (pKiller->m_Kills >= g_Config.m_InfSuperJumpKills && !pKiller->m_HasSuperJump) {
             pKiller->m_Kills -= g_Config.m_InfSuperJumpKills;
             pKiller->m_HasSuperJump = true;
-            GameServer()->SendBroadcast("你获得了超级跳跃的能力，按住空格以触发", pKiller->GetCID());
+            GameServer()->SendBroadcast("You earned super jump, hold spacebar to use it", pKiller->GetCID());
             char str[512] = {0};
             sprintf(str, g_Config.m_InfSuperJumpText, Server()->ClientName(pKiller->GetCID()));
             GameServer()->SendChatTarget(-1, str);
         }
-    } else {
+    } else if(pKiller->Heroed()) {
+        if (pKiller->m_Kills >= g_Config.m_InfHeroAuraKills && !pKiller->m_HasHeroaura) {
+            pKiller->m_Kills -= g_Config.m_InfHeroAuraKills;
+            pKiller->m_HasHeroaura = true;
+            GameServer()->SendBroadcast("You got a heroarua, use hammer to launch it", pKiller->GetCID());
+            char str[512] = {0};
+            sprintf(str, g_Config.m_InfHeroAuraText, Server()->ClientName(pKiller->GetCID()));
+            GameServer()->SendChatTarget(-1, str);
+        }
+    }else {
         if (pKiller->m_Kills >= g_Config.m_InfAirstrikeKills && !pKiller->m_HasAirstrike) {
             pKiller->m_Kills -= g_Config.m_InfAirstrikeKills;
             pKiller->m_HasAirstrike = true;
-            GameServer()->SendBroadcast("你获得了召唤空袭的能力，使用锤子来触发它 :D（小心自己被炸死啊）", pKiller->GetCID());
+            GameServer()->SendBroadcast("You got an airstrike, use hammer to launch it ", pKiller->GetCID());
             char str[512] = {0};
             sprintf(str, g_Config.m_InfAirstrikeText, Server()->ClientName(pKiller->GetCID()));
             GameServer()->SendChatTarget(-1, str);

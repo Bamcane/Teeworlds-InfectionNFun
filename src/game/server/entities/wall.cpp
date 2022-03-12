@@ -8,7 +8,7 @@ CWall::CWall(CGameWorld *pWorld, vec2 From, vec2 To, int Owner):
     m_Owner = Owner;
     m_StartTick = Server()->Tick();
     m_Pos = From;
-    m_To = From;
+    m_To = To;
     if (distance(To, From) >= g_Config.m_InfWallLength) {
         float Angle = atan2(To.y - From.y, To.x - From.x);
         m_To = vec2(cos(Angle) * g_Config.m_InfWallLength,
@@ -28,16 +28,19 @@ bool CWall::HitCharacter(vec2 From, vec2 To, CCharacter *pCharacter) {
 	{
 		IntersectPos = From;
 	}
+
     return distance(pCharacter->m_Pos, IntersectPos) < pCharacter->m_ProximityRadius;
 }
 
 void CWall::Tick() {
     m_Active = true;
     if (!GameServer()->m_apPlayers[m_Owner]) {
+        Reset();
         return;
     } else if (GameServer()->m_apPlayers[m_Owner]->GetTeam() == TEAM_SPECTATORS ||
                GameServer()->m_apPlayers[m_Owner]->Infected() ||
                Server()->Tick() >= m_StartTick + Server()->TickSpeed() * g_Config.m_InfWallLife) {
+        Reset();
         return;
     } else if (Server()->Tick() < m_StartTick + Server()->TickSpeed() * g_Config.m_InfWallDelay) {
         m_Active = false;
@@ -52,7 +55,6 @@ void CWall::Tick() {
         if (pCharacter->GetPlayer()->Infected())
             if (HitCharacter(m_Pos, m_To, pCharacter))
                 pCharacter->Die(m_Owner, WEAPON_WORLD);
-                Reset();
 
         pCharacter = (CCharacter *)pCharacter->TypeNext();
     }

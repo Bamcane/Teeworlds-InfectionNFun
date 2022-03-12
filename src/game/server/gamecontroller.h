@@ -41,7 +41,6 @@ protected:
 	void EvaluateSpawnType(CSpawnEval *pEval, int Type);
 	bool EvaluateSpawn(class CPlayer *pP, vec2 *pPos);
 
-	void CycleMap();
 	void ResetGame();
 
 	char m_aMapWish[128];
@@ -61,6 +60,7 @@ protected:
 	bool m_ForceBalanced;
 	
 	int m_NextZombie;
+	int m_NextHero;
 	int m_ZombieSpawnTick;
 
 public:
@@ -83,6 +83,9 @@ public:
 	
 	void CureAll();
 	int PickZombie();
+	int PickHero(int thehero = 1);
+
+	void CycleMap();
 
 	bool IsFriendlyFire(int ClientID1, int ClientID2);
 

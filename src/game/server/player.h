@@ -23,9 +23,12 @@ public:
 	void SetTeam(int Team, bool DoChatMsg=true);
 	int GetTeam() const { return m_Team; }
 	int GetCID() const { return m_ClientID; }
-    void Infect(int By = -1, int Weapon = WEAPON_GAME);
+
+    void Infect(int By = -1, int Weapon = WEAPON_HAMMER);
+	void Heronow(int By = -1, int Weapon = WEAPON_SHOTGUN);
     void Cure(int By = -1, int WEAPON = WEAPON_GAME);
-    inline bool Infected() { return (m_Zombie > 0); }
+    inline bool Infected() { return (m_Zombie > 0 ); }
+	inline bool Heroed() { return (m_Zombie == 0 && m_hero == 1);}//m_hero = 1 is Hero
 
 	bool IsInfTeam(int ClientID);
 
@@ -114,12 +117,19 @@ public:
 		I_ZOMBIE = 2
     };
     int m_Zombie;
-    int m_Kills;
+	enum
+	{
+		PEOPLE = 0,
+		HERO = 1
+	};
+	int m_hero;
+    
+	int m_Kills;
     bool m_HasSuperJump;
     bool m_HasAirstrike;
+	bool m_HasHeroaura;
 
 private:
-
 	CCharacter *m_pCharacter;
 	CGameContext *m_pGameServer;
 
@@ -130,7 +140,6 @@ private:
 	bool m_Spawning;
 	int m_ClientID;
 	int m_Team;
-
 	bool m_Muted;
 };
 

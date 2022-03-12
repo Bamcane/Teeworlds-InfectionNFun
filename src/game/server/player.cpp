@@ -31,6 +31,7 @@ CPlayer::CPlayer(CGameContext *pGameServer, int ClientID, int Team)
 	m_Kills = 0;
 	m_HasSuperJump = false;
 	m_HasAirstrike = false;
+	m_HasHeroaura = false;
 
 	m_Muted = false;
 }
@@ -133,15 +134,30 @@ void CPlayer::Snap(int SnappingClient)
 	CNetObj_ClientInfo *pClientInfo = static_cast<CNetObj_ClientInfo *>(Server()->SnapNewItem(NETOBJTYPE_CLIENTINFO, m_ClientID, sizeof(CNetObj_ClientInfo)));
 	if(!pClientInfo)
 		return;
-
-	StrToInts(&pClientInfo->m_Name0, 4, Server()->ClientName(m_ClientID));
-	StrToInts(&pClientInfo->m_Clan0, 3, m_Zombie ? m_Zombie == ZOMBIE ? "Zombie" : "iZombie" : Server()->ClientClan(m_ClientID));
-	pClientInfo->m_Country = Server()->ClientCountry(m_ClientID);
-	StrToInts(&pClientInfo->m_Skin0, 6, m_Zombie ? "cammo" : m_TeeInfos.m_SkinName);
-	pClientInfo->m_UseCustomColor = m_Zombie ? true : false;
-	pClientInfo->m_ColorBody = m_Zombie ? 3920896 : m_TeeInfos.m_ColorBody;
-	pClientInfo->m_ColorFeet = m_TeeInfos.m_ColorFeet;
-
+	
+	if(GameServer()->m_apPlayers[m_ClientID]->Infected())
+	{
+		StrToInts(&pClientInfo->m_Name0, 4, Server()->ClientName(m_ClientID));
+		StrToInts(&pClientInfo->m_Clan0, 3, m_Zombie ? m_Zombie == ZOMBIE ? "Zombie" : "iZombie" : Server()->ClientClan(m_ClientID));
+		pClientInfo->m_Country = Server()->ClientCountry(m_ClientID);
+		StrToInts(&pClientInfo->m_Skin0, 6, m_Zombie ? "cammostripes" : m_TeeInfos.m_SkinName);
+		pClientInfo->m_UseCustomColor = m_Zombie ? true : false;
+		pClientInfo->m_ColorBody = m_Zombie ? 3920896 : m_TeeInfos.m_ColorBody;
+		pClientInfo->m_ColorFeet = m_TeeInfos.m_ColorFeet;
+	}else if(GameServer()->m_apPlayers[m_ClientID]->Heroed())
+	{
+		StrToInts(&pClientInfo->m_Name0, 4, Server()->ClientName(m_ClientID));
+		StrToInts(&pClientInfo->m_Clan0, 3, m_hero ? m_hero == HERO ? "Hero" : "Hero" : Server()->ClientClan(m_ClientID));
+		pClientInfo->m_Country = Server()->ClientCountry(m_ClientID);
+		StrToInts(&pClientInfo->m_Skin0, 6, m_hero ? "redstripe" : m_TeeInfos.m_SkinName);
+		pClientInfo->m_ColorFeet = m_TeeInfos.m_ColorFeet;
+	}else
+	{
+		StrToInts(&pClientInfo->m_Name0, 4, Server()->ClientName(m_ClientID));
+		StrToInts(&pClientInfo->m_Clan0, 3, m_Zombie ? m_Zombie == HUMAN ? "Human" : "Human" : Server()->ClientClan(m_ClientID));
+		pClientInfo->m_Country = Server()->ClientCountry(m_ClientID);
+		pClientInfo->m_ColorFeet = m_TeeInfos.m_ColorFeet;
+	}
 	CNetObj_PlayerInfo *pPlayerInfo = static_cast<CNetObj_PlayerInfo *>(Server()->SnapNewItem(NETOBJTYPE_PLAYERINFO, m_ClientID, sizeof(CNetObj_PlayerInfo)));
 	if(!pPlayerInfo)
 		return;
@@ -296,21 +312,20 @@ void CPlayer::SetTeam(int Team, bool DoChatMsg)
 	}
 }
 
-
 void CPlayer::Infect(int By, int Weapon) {
     if (m_Zombie)
         return;
 
     if (m_pCharacter) {
         m_pCharacter->ClearWeapons();
-    	m_pCharacter->GiveWeapon(WEAPON_HAMMER, -1);
-		m_pCharacter->GiveWeapon(WEAPON_GUN,10);
-    	m_pCharacter->SetWeapon(WEAPON_HAMMER);
+        m_pCharacter->GiveWeapon(WEAPON_HAMMER, -1);
+        m_pCharacter->SetWeapon(WEAPON_HAMMER);
     }
 
     if (By == -1)
     {
         m_Zombie = ZOMBIE;
+		m_hero = PEOPLE;
         return;
     }
 
@@ -328,6 +343,44 @@ void CPlayer::Infect(int By, int Weapon) {
 	GameServer()->m_pController->OnCharacterDeath(m_pCharacter, GameServer()->m_apPlayers[By], WEAPON_HAMMER);
 
     m_Zombie = ZOMBIE;
+	m_hero = PEOPLE;
+}
+
+void CPlayer::Heronow(int By,int Weapon) {
+    if (m_Zombie)
+        return;
+
+    if (m_pCharacter) {
+        m_pCharacter->ClearWeapons();
+        m_pCharacter->GiveWeapon(WEAPON_HAMMER, -1);
+        m_pCharacter->GiveWeapon(WEAPON_GUN, 8);
+        m_pCharacter->GiveWeapon(WEAPON_SHOTGUN, 8);
+        m_pCharacter->GiveWeapon(WEAPON_GRENADE, 8);
+        m_pCharacter->GiveWeapon(WEAPON_RIFLE, 8);
+    }
+
+    if (By == -1)
+    {
+        m_Zombie = HUMAN;
+		m_hero = HERO;
+        return;
+    }
+
+    // send the kill message
+	CNetMsg_Sv_KillMsg Msg;
+	Msg.m_Killer = By;
+	Msg.m_Victim = m_ClientID;
+	Msg.m_Weapon = Weapon;
+	Msg.m_ModeSpecial = 0;
+	Server()->SendPackMsg(&Msg, MSGFLAG_VITAL, -1);
+
+	if (m_pCharacter)
+        GameServer()->CreatePlayerSpawn(m_pCharacter->m_Pos);
+
+	GameServer()->m_pController->OnCharacterDeath(m_pCharacter, GameServer()->m_apPlayers[By], WEAPON_HAMMER);
+
+    m_Zombie = HUMAN;
+	m_hero = HERO;
 }
 
 void CPlayer::Cure(int By, int Weapon) {

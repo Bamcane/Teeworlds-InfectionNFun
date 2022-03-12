@@ -110,12 +110,10 @@ void CCharacter::SetWeapon(int W)
 	m_LastWeapon = m_ActiveWeapon;
 	m_QueuedWeapon = -1;
 	m_ActiveWeapon = W;
-	
 	GameServer()->CreateSound(m_Pos, SOUND_WEAPON_SWITCH);
+
 	if(m_ActiveWeapon < 0 || m_ActiveWeapon >= NUM_WEAPONS)
 		m_ActiveWeapon = 0;
-	
-	
 }
 
 bool CCharacter::IsGrounded()
@@ -312,9 +310,21 @@ void CCharacter::FireWeapon()
                     m_pPlayer->m_HasAirstrike = false;
                     break;
                 }
-                ResetWall();
-                m_WallStart = m_Pos;
-                m_pWall = new CWall(GameWorld(), m_WallStart, m_Pos, m_pPlayer->GetCID());
+				if (!m_pPlayer->Heroed())
+				{
+                	if (m_pWall || m_WallStart == vec2(0, 0)) {
+						ResetWall();
+                    	m_WallStart = m_Pos;
+                	} else if (!m_pWall)
+                    	m_pWall = new CWall(GameWorld(), m_WallStart, m_Pos, m_pPlayer->GetCID());
+                	break;
+				}else{
+					if (m_pPlayer->m_HasHeroaura) {
+                    	GameServer()->CreateHeroaura();
+                    	m_pPlayer->m_HasHeroaura = false;
+                    	break;
+                	}
+				}
             }
 
 			CCharacter *apEnts[MAX_CLIENTS];
