@@ -9,6 +9,7 @@
 #include "laser.h"
 #include "projectile.h"
 #include "wall.h"
+#include "heroaura.h"
 
 //input count
 struct CInputCount
@@ -630,6 +631,23 @@ void CCharacter::Tick()
 		GameLayerClipped(m_Pos))
 	{
 		Die(m_LastDamagerID, m_LastDamagerWeapon);
+	}
+
+	if (!m_AuraProtect[0])
+	{
+		if(GetPlayer()->Heroed())
+		{
+			if(GetPlayer()->m_HasHeroaura)
+			{
+				for ( int i = 0; i < 12; i++ )
+					m_AuraProtect[i] = new CAura(&(GameServer()->m_World), m_pPlayer->GetCID(), i * 30, 60, POWERUP_HEALTH);
+			}
+			else
+			{
+				for ( int i = 0; i < 12; i++ )
+					m_AuraProtect[i] = new CAura(&(GameServer()->m_World), m_pPlayer->GetCID(), i * 30, 60, POWERUP_ARMOR);
+			}
+		}
 	}
 
 	// handle Weapons

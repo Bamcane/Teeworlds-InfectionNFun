@@ -346,7 +346,7 @@ void CPlayer::Infect(int By, int Weapon) {
 	m_hero = PEOPLE;
 }
 
-void CPlayer::Heronow(int By,int Weapon) {
+void CPlayer::OnHero(int By,int Weapon) {
     if (m_Zombie)
         return;
 

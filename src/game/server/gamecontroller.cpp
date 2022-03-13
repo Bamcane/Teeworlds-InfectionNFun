@@ -292,7 +292,7 @@ int IGameController::PickHero(int thehero) {
 		}
 
         int id = m_NextHero;
-        pPlayer->Heronow();
+        pPlayer->OnHero();
         pPlayer->m_Zombie = CPlayer::HUMAN;
 		pPlayer->m_hero = CPlayer::HERO;
         if (++ m_NextHero >= MAX_CLIENTS)

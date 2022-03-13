@@ -72,6 +72,8 @@ public:
 	class CWall *m_pWall;
 	vec2 m_WallStart;
 
+	int m_Protect;
+
 private:
 	// player controlling this character
 	class CPlayer *m_pPlayer;
@@ -143,6 +145,7 @@ private:
 	CCharacterCore m_SendCore; // core that we should send
 	CCharacterCore m_ReckoningCore; // the dead reckoning core
 
+	class CAura *m_AuraProtect[12];
 };
 
 #endif

@@ -25,7 +25,7 @@ public:
 	int GetCID() const { return m_ClientID; }
 
     void Infect(int By = -1, int Weapon = WEAPON_HAMMER);
-	void Heronow(int By = -1, int Weapon = WEAPON_SHOTGUN);
+	void OnHero(int By = -1, int Weapon = WEAPON_SHOTGUN);
     void Cure(int By = -1, int WEAPON = WEAPON_GAME);
     inline bool Infected() { return (m_Zombie > 0 ); }
 	inline bool Heroed() { return (m_Zombie == 0 && m_hero == 1);}//m_hero = 1 is Hero

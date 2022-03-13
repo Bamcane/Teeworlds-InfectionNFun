@@ -1641,6 +1641,16 @@ void CGameContext::ConSuperJump(IConsole::IResult *pResult, void *pUserData) {
     pSelf->m_apPlayers[ClientID]->m_HasSuperJump = true;
 }
 
+void CGameContext::ConHeroAura(IConsole::IResult *pResult, void *pUserData) {
+    CGameContext *pSelf = (CGameContext *)pUserData;
+    int ClientID = clamp(pResult->GetInteger(0), 0, MAX_CLIENTS - 1);
+
+    if (!pSelf->m_apPlayers[ClientID])
+        return;
+
+    pSelf->m_apPlayers[ClientID]->m_HasHeroaura = true;
+}
+
 void CGameContext::ConMute(IConsole::IResult *pResult, void *pUserData)
 {
     CGameContext *pSelf = (CGameContext *)pUserData;

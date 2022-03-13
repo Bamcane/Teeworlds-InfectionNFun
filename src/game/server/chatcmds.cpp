@@ -12,8 +12,9 @@ void CGameContext::ExecuteCommand(int ClientID, const char* pCmd){
     }
     else if(!str_comp_nocase(pCmd,"info"))
     {
-            SendChatTarget(ClientID, "----info----");
-            SendChatTarget(ClientID, "The mod modified from binf mod");
-            SendChatTarget(ClientID, "It made by ErrorDreemurr");
+        SendChatTarget(ClientID, "----info----");
+        SendChatTarget(ClientID, "The mod modified from binf mod");
+        SendChatTarget(ClientID, "It made by ErrorDreemurr");
     }
+    
 }

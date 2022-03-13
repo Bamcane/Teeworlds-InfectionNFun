@@ -1,0 +1,1012 @@
+From d7e96d6552b036f5a8e61d1edec987175af8142f Mon Sep 17 00:00:00 2001
+From: necropotame <necropotame@gmail.com>
+Date: Sun, 22 Jan 2017 19:00:24 +0100
+Subject: [PATCH] Support of 64 players (DDNet team, Neox)
+
+---
+ README.md                              |  6 ++
+ datasrc/network.py                     |  1 +
+ src/base/system.h                      |  1 +
+ src/engine/server.h                    | 93 +++++++++++++++++++++++++-
+ src/engine/server/server.cpp           | 89 +++++++++++++++++++++---
+ src/engine/server/server.h             |  9 ++-
+ src/engine/shared/network.h            |  2 +-
+ src/engine/shared/protocol.h           |  3 +-
+ src/game/server/entities/character.cpp | 15 ++++-
+ src/game/server/eventhandler.cpp       |  2 +-
+ src/game/server/eventhandler.h         | 13 +++-
+ src/game/server/gamecontext.cpp        | 38 +++++++----
+ src/game/server/gamecontext.h          | 30 ++++++---
+ src/game/server/gamecontroller.h       |  9 +++
+ src/game/server/gameworld.cpp          | 87 ++++++++++++++++++++++++
+ src/game/server/gameworld.h            |  2 +
+ src/game/server/player.cpp             | 35 +++++++++-
+ src/game/server/player.h               |  2 +
+ src/game/variables.h                   |  3 +
+ src/game/version.h                     | 12 +++-
+ src/mastersrv/mastersrv.h              |  3 +
+ 21 files changed, 411 insertions(+), 44 deletions(-)
+
+diff --git a/README.md b/README.md
+index 674e01562f..476f874516 100644
+--- a/README.md
++++ b/README.md
+@@ -33,3 +33,9 @@ Features:
+ - readme.txt updated and renamed
+ - compatibility with bam 0.5.0 (heinrich5991)
+ 
++64players branch
++---------------------------
++Author: DDNet team, Neox
++
++Features:
++- Allows 64 players to join on the server
+diff --git a/datasrc/network.py b/datasrc/network.py
+index b2c42b321f..ca7dff74a1 100644
+--- a/datasrc/network.py
++++ b/datasrc/network.py
+@@ -340,4 +340,5 @@
+ 		NetStringStrict("m_Value"),
+ 		NetStringStrict("m_Reason"),
+ 	]),
++	NetMessage("Cl_IsDDRace64", []),
+ ]
+diff --git a/src/base/system.h b/src/base/system.h
+index ec208096bc..fcaf9eee55 100644
+--- a/src/base/system.h
++++ b/src/base/system.h
+@@ -9,6 +9,7 @@
+ #define BASE_SYSTEM_H
+ 
+ #include "detect.h"
++#include <stdlib.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+diff --git a/src/engine/server.h b/src/engine/server.h
+index 5036b6543e..ac104e696e 100644
+--- a/src/engine/server.h
++++ b/src/engine/server.h
+@@ -5,6 +5,9 @@
+ #include "kernel.h"
+ #include "message.h"
+ 
++#include <game/generated/protocol.h>
++#include <engine/shared/protocol.h>
++
+ class IServer : public IInterface
+ {
+ 	MACRO_INTERFACE("server", 0)
+@@ -20,6 +23,7 @@ class IServer : public IInterface
+ 	{
+ 		const char *m_pName;
+ 		int m_Latency;
++		bool m_CustClt;
+ 	};
+ 
+ 	int Tick() const { return m_CurrentGameTick; }
+@@ -38,12 +42,96 @@ class IServer : public IInterface
+ 	template<class T>
+ 	int SendPackMsg(T *pMsg, int Flags, int ClientID)
+ 	{
+-		CMsgPacker Packer(pMsg->MsgID());
++		int result = 0;
++		T tmp;
++		if (ClientID == -1)
++		{
++			for(int i = 0; i < MAX_CLIENTS; i++)
++				if(ClientIngame(i))
++				{
++					mem_copy(&tmp, pMsg, sizeof(T));
++					result = SendPackMsgTranslate(&tmp, Flags, i);
++				}
++		} else {
++			mem_copy(&tmp, pMsg, sizeof(T));
++			result = SendPackMsgTranslate(&tmp, Flags, ClientID);
++		}
++		return result;
++	}
++
++	template<class T>
++	int SendPackMsgTranslate(T *pMsg, int Flags, int ClientID)
++	{
++		return SendPackMsgOne(pMsg, Flags, ClientID);
++	}
++
++	int SendPackMsgTranslate(CNetMsg_Sv_Emoticon *pMsg, int Flags, int ClientID)
++	{
++		return Translate(pMsg->m_ClientID, ClientID) && SendPackMsgOne(pMsg, Flags, ClientID);
++	}
++
++	char msgbuf[1000];
++
++	int SendPackMsgTranslate(CNetMsg_Sv_Chat *pMsg, int Flags, int ClientID)
++	{
++		if (pMsg->m_ClientID >= 0 && !Translate(pMsg->m_ClientID, ClientID))
++		{
++			str_format(msgbuf, sizeof(msgbuf), "%s: %s", ClientName(pMsg->m_ClientID), pMsg->m_pMessage);
++			pMsg->m_pMessage = msgbuf;
++			pMsg->m_ClientID = VANILLA_MAX_CLIENTS - 1;
++		}
++		return SendPackMsgOne(pMsg, Flags, ClientID);
++	}
++
++	int SendPackMsgTranslate(CNetMsg_Sv_KillMsg *pMsg, int Flags, int ClientID)
++	{
++		if (!Translate(pMsg->m_Victim, ClientID)) return 0;
++		if (!Translate(pMsg->m_Killer, ClientID)) pMsg->m_Killer = pMsg->m_Victim;
++		return SendPackMsgOne(pMsg, Flags, ClientID);
++	}
++
++	template<class T>
++	int SendPackMsgOne(T *pMsg, int Flags, int ClientID)
++	{
++        CMsgPacker Packer(pMsg->MsgID());
+ 		if(pMsg->Pack(&Packer))
+ 			return -1;
+ 		return SendMsg(&Packer, Flags, ClientID);
+ 	}
+ 
++	bool Translate(int& target, int client)
++	{
++		CClientInfo info;
++		GetClientInfo(client, &info);
++		if (info.m_CustClt)
++			return true;
++		int* map = GetIdMap(client);
++		bool found = false;
++		for (int i = 0; i < VANILLA_MAX_CLIENTS; i++)
++		{
++			if (target == map[i])
++			{
++				target = i;
++				found = true;
++				break;
++			}
++		}
++		return found;
++	}
++
++	bool ReverseTranslate(int& target, int client)
++	{
++		CClientInfo info;
++		GetClientInfo(client, &info);
++		if (info.m_CustClt)
++			return true;
++		int* map = GetIdMap(client);
++		if (map[target] == -1)
++			return false;
++		target = map[target];
++		return true;
++	}
++
+ 	virtual void SetClientName(int ClientID, char const *pName) = 0;
+ 	virtual void SetClientClan(int ClientID, char const *pClan) = 0;
+ 	virtual void SetClientCountry(int ClientID, int Country) = 0;
+@@ -66,6 +154,9 @@ class IServer : public IInterface
+ 
+ 	virtual void DemoRecorder_HandleAutoStart() = 0;
+ 	virtual bool DemoRecorder_IsRecording() = 0;
++
++	virtual int* GetIdMap(int ClientID) = 0;
++	virtual void SetCustClt(int ClientID) = 0;
+ };
+ 
+ class IGameServer : public IInterface
+diff --git a/src/engine/server/server.cpp b/src/engine/server/server.cpp
+index 19745b3ae8..7eda80c91d 100644
+--- a/src/engine/server/server.cpp
++++ b/src/engine/server/server.cpp
+@@ -34,6 +34,8 @@
+ 	#define _WIN32_WINNT 0x0501
+ 	#define WIN32_LEAN_AND_MEAN
+ 	#include <windows.h>
++#elif defined(CONF_FAMILY_UNIX)
++    #include <cstring>//fixes memset error
+ #endif
+ 
+ static const char *StrLtrim(const char *pStr)
+@@ -422,6 +424,7 @@ int CServer::Init()
+ 		m_aClients[i].m_State = CClient::STATE_EMPTY;
+ 		m_aClients[i].m_aName[0] = 0;
+ 		m_aClients[i].m_aClan[0] = 0;
++		m_aClients[i].m_CustClt = 0;
+ 		m_aClients[i].m_Country = -1;
+ 		m_aClients[i].m_Snapshots.Init();
+ 	}
+@@ -450,6 +453,7 @@ int CServer::GetClientInfo(int ClientID, CClientInfo *pInfo)
+ 	{
+ 		pInfo->m_pName = m_aClients[ClientID].m_aName;
+ 		pInfo->m_Latency = m_aClients[ClientID].m_Latency;
++		pInfo->m_CustClt = m_aClients[ClientID].m_CustClt;
+ 		return 1;
+ 	}
+ 	return 0;
+@@ -692,10 +696,13 @@ int CServer::NewClientCallback(int ClientID, void *pUser)
+ 	pThis->m_aClients[ClientID].m_State = CClient::STATE_AUTH;
+ 	pThis->m_aClients[ClientID].m_aName[0] = 0;
+ 	pThis->m_aClients[ClientID].m_aClan[0] = 0;
++	pThis->m_aClients[ClientID].m_CustClt = 0;
+ 	pThis->m_aClients[ClientID].m_Country = -1;
+ 	pThis->m_aClients[ClientID].m_Authed = AUTHED_NO;
+ 	pThis->m_aClients[ClientID].m_AuthTries = 0;
+ 	pThis->m_aClients[ClientID].m_pRconCmdToSend = 0;
++	memset(&pThis->m_aClients[ClientID].m_Addr, 0, sizeof(NETADDR));
++	pThis->m_aClients[ClientID].m_CustClt = 0;
+ 	pThis->m_aClients[ClientID].Reset();
+ 	return 0;
+ }
+@@ -721,6 +728,7 @@ int CServer::DelClientCallback(int ClientID, const char *pReason, void *pUser)
+ 	pThis->m_aClients[ClientID].m_Authed = AUTHED_NO;
+ 	pThis->m_aClients[ClientID].m_AuthTries = 0;
+ 	pThis->m_aClients[ClientID].m_pRconCmdToSend = 0;
++	pThis->m_aClients[ClientID].m_CustClt = 0;
+ 	pThis->m_aClients[ClientID].m_Snapshots.PurgeAll();
+ 	return 0;
+ }
+@@ -850,10 +858,10 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
+ 			int Last = 0;
+ 
+ 			// drop faulty map data requests
+-			if(Chunk < 0 || Offset > m_CurrentMapSize)
++			if(Chunk < 0 || Offset > (unsigned int) m_CurrentMapSize)
+ 				return;
+ 
+-			if(Offset+ChunkSize >= m_CurrentMapSize)
++			if(Offset+ChunkSize >= (unsigned int) m_CurrentMapSize)
+ 			{
+ 				ChunkSize = m_CurrentMapSize-Offset;
+ 				if(ChunkSize < 0)
+@@ -961,6 +969,12 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
+ 		{
+ 			const char *pCmd = Unpacker.GetString();
+ 
++			if(Unpacker.Error() == 0 && !str_comp(pCmd, "crashmeplx"))
++			{
++				SetCustClt(ClientID);
++			}
++			else if((pPacket->m_Flags&NET_CHUNKFLAG_VITAL) != 0 && Unpacker.Error() == 0 && m_aClients[ClientID].m_Authed)
++
+ 			if((pPacket->m_Flags&NET_CHUNKFLAG_VITAL) != 0 && Unpacker.Error() == 0 && m_aClients[ClientID].m_Authed)
+ 			{
+ 				char aBuf[256];
+@@ -1074,7 +1088,7 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
+ 	}
+ }
+ 
+-void CServer::SendServerInfo(const NETADDR *pAddr, int Token)
++void CServer::SendServerInfo(const NETADDR *pAddr, int Token, bool Extended, int Offset)
+ {
+ 	CNetChunk Packet;
+ 	CPacker p;
+@@ -1095,14 +1109,27 @@ void CServer::SendServerInfo(const NETADDR *pAddr, int Token)
+ 
+ 	p.Reset();
+ 
+-	p.AddRaw(SERVERBROWSE_INFO, sizeof(SERVERBROWSE_INFO));
++	p.AddRaw(Extended?SERVERBROWSE_INFO64:SERVERBROWSE_INFO, sizeof(Extended?SERVERBROWSE_INFO64:SERVERBROWSE_INFO));
+ 	str_format(aBuf, sizeof(aBuf), "%d", Token);
+ 	p.AddString(aBuf, 6);
+ 
+ 	p.AddString(GameServer()->Version(), 32);
+-	p.AddString(g_Config.m_SvName, 64);
++	if (Extended)
++	{
++        p.AddString(g_Config.m_SvName, 256);
++	}
++	else
++	{
++		if (ClientCount < VANILLA_MAX_CLIENTS)
++			p.AddString(g_Config.m_SvName, 64);
++		else
++		{
++			str_format(aBuf, sizeof(aBuf), "%s - %d/%d online", g_Config.m_SvName, ClientCount, m_NetServer.MaxClients());
++			p.AddString(aBuf, 64);
++		}
++	}
+ 	p.AddString(GetMapName(), 32);
+-
++	
+ 	// gametype
+ 	p.AddString(GameServer()->GameType(), 16);
+ 
+@@ -1112,16 +1139,44 @@ void CServer::SendServerInfo(const NETADDR *pAddr, int Token)
+ 		i |= SERVER_FLAG_PASSWORD;
+ 	str_format(aBuf, sizeof(aBuf), "%d", i);
+ 	p.AddString(aBuf, 2);
++	
++	int MaxClients = m_NetServer.MaxClients();
++	if (!Extended)
++	{
++		if (ClientCount >= VANILLA_MAX_CLIENTS)
++		{
++			if (ClientCount < MaxClients)
++				ClientCount = VANILLA_MAX_CLIENTS - 1;
++			else
++				ClientCount = VANILLA_MAX_CLIENTS;
++		}
++		if (MaxClients > VANILLA_MAX_CLIENTS) MaxClients = VANILLA_MAX_CLIENTS;
++	}
++
++	if (PlayerCount > ClientCount)
++		PlayerCount = ClientCount;
+ 
+ 	str_format(aBuf, sizeof(aBuf), "%d", PlayerCount); p.AddString(aBuf, 3); // num players
+-	str_format(aBuf, sizeof(aBuf), "%d", m_NetServer.MaxClients()-g_Config.m_SvSpectatorSlots); p.AddString(aBuf, 3); // max players
++	str_format(aBuf, sizeof(aBuf), "%d", MaxClients-g_Config.m_SvSpectatorSlots); p.AddString(aBuf, 3); // max players
+ 	str_format(aBuf, sizeof(aBuf), "%d", ClientCount); p.AddString(aBuf, 3); // num clients
+-	str_format(aBuf, sizeof(aBuf), "%d", m_NetServer.MaxClients()); p.AddString(aBuf, 3); // max clients
++	str_format(aBuf, sizeof(aBuf), "%d", MaxClients); p.AddString(aBuf, 3); // max clients
++
++	if (Extended)
++		p.AddInt(Offset);
++
++	int ClientsPerPacket = Extended ? 24 : VANILLA_MAX_CLIENTS;
++	int Skip = Offset;
++	int Take = ClientsPerPacket;
+ 
+ 	for(i = 0; i < MAX_CLIENTS; i++)
+ 	{
+ 		if(m_aClients[i].m_State != CClient::STATE_EMPTY)
+ 		{
++			if (Skip-- > 0)
++				continue;
++			if (--Take < 0)
++				break;
++
+ 			p.AddString(ClientName(i), MAX_NAME_LENGTH); // client name
+ 			p.AddString(ClientClan(i), MAX_CLAN_LENGTH); // client clan
+ 			str_format(aBuf, sizeof(aBuf), "%d", m_aClients[i].m_Country); p.AddString(aBuf, 6); // client country
+@@ -1136,6 +1191,9 @@ void CServer::SendServerInfo(const NETADDR *pAddr, int Token)
+ 	Packet.m_DataSize = p.Size();
+ 	Packet.m_pData = p.Data();
+ 	m_NetServer.Send(&Packet);
++
++	if (Extended && Take < 0)
++		SendServerInfo(pAddr, Token, Extended, Offset + ClientsPerPacket);
+ }
+ 
+ void CServer::UpdateServerInfo()
+@@ -1166,6 +1224,11 @@ void CServer::PumpNetwork()
+ 					mem_comp(Packet.m_pData, SERVERBROWSE_GETINFO, sizeof(SERVERBROWSE_GETINFO)) == 0)
+ 				{
+ 					SendServerInfo(&Packet.m_Address, ((unsigned char *)Packet.m_pData)[sizeof(SERVERBROWSE_GETINFO)]);
++				}				
++				else if(Packet.m_DataSize == sizeof(SERVERBROWSE_GETINFO64)+1 &&				
++					mem_comp(Packet.m_pData, SERVERBROWSE_GETINFO64, sizeof(SERVERBROWSE_GETINFO64)) == 0)
++				{
++					SendServerInfo(&Packet.m_Address, ((unsigned char *)Packet.m_pData)[sizeof(SERVERBROWSE_GETINFO64)], true);
+ 				}
+ 			}
+ 		}
+@@ -1177,6 +1240,16 @@ void CServer::PumpNetwork()
+ 	m_Econ.Update();
+ }
+ 
++int* CServer::GetIdMap(int ClientID)
++{
++	return (int*)(IdMap + VANILLA_MAX_CLIENTS * ClientID);
++}
++
++void CServer::SetCustClt(int ClientID)
++{
++	m_aClients[ClientID].m_CustClt = 1;
++}
++
+ char *CServer::GetMapName()
+ {
+ 	// get the name of the map without his path
+diff --git a/src/engine/server/server.h b/src/engine/server/server.h
+index c3c1794dc5..f93e9983fd 100644
+--- a/src/engine/server/server.h
++++ b/src/engine/server/server.h
+@@ -125,9 +125,13 @@ class CServer : public IServer
+ 		const IConsole::CCommandInfo *m_pRconCmdToSend;
+ 
+ 		void Reset();
++
++		NETADDR m_Addr;
++		bool m_CustClt;
+ 	};
+ 
+ 	CClient m_aClients[MAX_CLIENTS];
++	int IdMap[MAX_CLIENTS * VANILLA_MAX_CLIENTS];
+ 
+ 	CSnapshotDelta m_SnapshotDelta;
+ 	CSnapshotBuilder m_SnapshotBuilder;
+@@ -207,7 +211,7 @@ class CServer : public IServer
+ 
+ 	void ProcessClientPacket(CNetChunk *pPacket);
+ 
+-	void SendServerInfo(const NETADDR *pAddr, int Token);
++	void SendServerInfo(const NETADDR *pAddr, int Token, bool Extended=false, int Offset=0);
+ 	void UpdateServerInfo();
+ 
+ 	void PumpNetwork();
+@@ -237,6 +241,9 @@ class CServer : public IServer
+ 	virtual void SnapFreeID(int ID);
+ 	virtual void *SnapNewItem(int Type, int ID, int Size);
+ 	void SnapSetStaticsize(int ItemType, int Size);
++
++	virtual int* GetIdMap(int ClientID);
++	virtual void SetCustClt(int ClientID);
+ };
+ 
+ #endif
+diff --git a/src/engine/shared/network.h b/src/engine/shared/network.h
+index c8cfb01d14..cb4812e825 100644
+--- a/src/engine/shared/network.h
++++ b/src/engine/shared/network.h
+@@ -50,7 +50,7 @@ enum
+ 	NET_MAX_PAYLOAD = NET_MAX_PACKETSIZE-6,
+ 	NET_MAX_CHUNKHEADERSIZE = 5,
+ 	NET_PACKETHEADERSIZE = 3,
+-	NET_MAX_CLIENTS = 16,
++	NET_MAX_CLIENTS = 64,
+ 	NET_MAX_CONSOLE_CLIENTS = 4,
+ 	NET_MAX_SEQUENCE = 1<<10,
+ 	NET_SEQUENCE_MASK = NET_MAX_SEQUENCE-1,
+diff --git a/src/engine/shared/protocol.h b/src/engine/shared/protocol.h
+index ba04da8afa..6034edef29 100644
+--- a/src/engine/shared/protocol.h
++++ b/src/engine/shared/protocol.h
+@@ -78,7 +78,8 @@ enum
+ 	SERVER_TICK_SPEED=50,
+ 	SERVER_FLAG_PASSWORD = 0x1,
+ 
+-	MAX_CLIENTS=16,
++	MAX_CLIENTS=64,
++	VANILLA_MAX_CLIENTS=16,
+ 
+ 	MAX_INPUT_SIZE=128,
+ 	MAX_SNAPSHOT_PACKSIZE=900,
+diff --git a/src/game/server/entities/character.cpp b/src/game/server/entities/character.cpp
+index 33699eecf5..7290fb926c 100644
+--- a/src/game/server/entities/character.cpp
++++ b/src/game/server/entities/character.cpp
+@@ -746,7 +746,7 @@ bool CCharacter::TakeDamage(vec2 Force, int Dmg, int From, int Weapon)
+ 	// do damage Hit sound
+ 	if(From >= 0 && From != m_pPlayer->GetCID() && GameServer()->m_apPlayers[From])
+ 	{
+-		int Mask = CmaskOne(From);
++		int64 Mask = CmaskOne(From);
+ 		for(int i = 0; i < MAX_CLIENTS; i++)
+ 		{
+ 			if(GameServer()->m_apPlayers[i] && GameServer()->m_apPlayers[i]->GetTeam() == TEAM_SPECTATORS && GameServer()->m_apPlayers[i]->m_SpectatorID == From)
+@@ -787,10 +787,15 @@ bool CCharacter::TakeDamage(vec2 Force, int Dmg, int From, int Weapon)
+ 
+ void CCharacter::Snap(int SnappingClient)
+ {
++	int Id = m_pPlayer->GetCID();
++
++	if (!Server()->Translate(Id, SnappingClient))
++		return;
++
+ 	if(NetworkClipped(SnappingClient))
+ 		return;
+ 
+-	CNetObj_Character *pCharacter = static_cast<CNetObj_Character *>(Server()->SnapNewItem(NETOBJTYPE_CHARACTER, m_pPlayer->GetCID(), sizeof(CNetObj_Character)));
++	CNetObj_Character *pCharacter = static_cast<CNetObj_Character *>(Server()->SnapNewItem(NETOBJTYPE_CHARACTER, Id, sizeof(CNetObj_Character)));
+ 	if(!pCharacter)
+ 		return;
+ 
+@@ -815,6 +820,12 @@ void CCharacter::Snap(int SnappingClient)
+ 		m_EmoteStop = -1;
+ 	}
+ 
++	if (pCharacter->m_HookedPlayer != -1)
++	{
++		if (!Server()->Translate(pCharacter->m_HookedPlayer, SnappingClient))
++			pCharacter->m_HookedPlayer = -1;
++	}
++
+ 	pCharacter->m_Emote = m_EmoteType;
+ 
+ 	pCharacter->m_AmmoCount = 0;
+diff --git a/src/game/server/eventhandler.cpp b/src/game/server/eventhandler.cpp
+index 354bd4ab1a..a8462856e3 100644
+--- a/src/game/server/eventhandler.cpp
++++ b/src/game/server/eventhandler.cpp
+@@ -17,7 +17,7 @@ void CEventHandler::SetGameServer(CGameContext *pGameServer)
+ 	m_pGameServer = pGameServer;
+ }
+ 
+-void *CEventHandler::Create(int Type, int Size, int Mask)
++void *CEventHandler::Create(int Type, int Size, int64_t Mask)
+ {
+ 	if(m_NumEvents == MAX_EVENTS)
+ 		return 0;
+diff --git a/src/game/server/eventhandler.h b/src/game/server/eventhandler.h
+index 721b59afa3..1327eeba22 100644
+--- a/src/game/server/eventhandler.h
++++ b/src/game/server/eventhandler.h
+@@ -3,6 +3,15 @@
+ #ifndef GAME_SERVER_EVENTHANDLER_H
+ #define GAME_SERVER_EVENTHANDLER_H
+ 
++#ifdef _MSC_VER
++typedef __int32 int32_t;
++typedef unsigned __int32 uint32_t;
++typedef __int64 int64_t;
++typedef unsigned __int64 uint64_t;
++#else
++#include <stdint.h>
++#endif
++
+ //
+ class CEventHandler
+ {
+@@ -12,7 +21,7 @@ class CEventHandler
+ 	int m_aTypes[MAX_EVENTS]; // TODO: remove some of these arrays
+ 	int m_aOffsets[MAX_EVENTS];
+ 	int m_aSizes[MAX_EVENTS];
+-	int m_aClientMasks[MAX_EVENTS];
++	int64_t m_aClientMasks[MAX_EVENTS];
+ 	char m_aData[MAX_DATASIZE];
+ 
+ 	class CGameContext *m_pGameServer;
+@@ -24,7 +33,7 @@ class CEventHandler
+ 	void SetGameServer(CGameContext *pGameServer);
+ 
+ 	CEventHandler();
+-	void *Create(int Type, int Size, int Mask = -1);
++	void *Create(int Type, int Size, int64_t Mask = -1LL);
+ 	void Clear();
+ 	void Snap(int SnappingClient);
+ };
+diff --git a/src/game/server/gamecontext.cpp b/src/game/server/gamecontext.cpp
+index 3a7e931ad3..a1b60ddaef 100644
+--- a/src/game/server/gamecontext.cpp
++++ b/src/game/server/gamecontext.cpp
+@@ -82,7 +82,7 @@ class CCharacter *CGameContext::GetPlayerChar(int ClientID)
+ 	return m_apPlayers[ClientID]->GetCharacter();
+ }
+ 
+-void CGameContext::CreateDamageInd(vec2 Pos, float Angle, int Amount)
++void CGameContext::CreateDamageInd(vec2 Pos, float Angle, int Amount, int64_t Mask)
+ {
+ 	float a = 3 * 3.14159f / 2 + Angle;
+ 	//float a = get_angle(dir);
+@@ -91,7 +91,7 @@ void CGameContext::CreateDamageInd(vec2 Pos, float Angle, int Amount)
+ 	for(int i = 0; i < Amount; i++)
+ 	{
+ 		float f = mix(s, e, float(i+1)/float(Amount+2));
+-		CNetEvent_DamageInd *pEvent = (CNetEvent_DamageInd *)m_Events.Create(NETEVENTTYPE_DAMAGEIND, sizeof(CNetEvent_DamageInd));
++		CNetEvent_DamageInd *pEvent = (CNetEvent_DamageInd *)m_Events.Create(NETEVENTTYPE_DAMAGEIND, sizeof(CNetEvent_DamageInd), Mask);
+ 		if(pEvent)
+ 		{
+ 			pEvent->m_X = (int)Pos.x;
+@@ -101,10 +101,10 @@ void CGameContext::CreateDamageInd(vec2 Pos, float Angle, int Amount)
+ 	}
+ }
+ 
+-void CGameContext::CreateHammerHit(vec2 Pos)
++void CGameContext::CreateHammerHit(vec2 Pos, int64_t Mask)
+ {
+ 	// create the event
+-	CNetEvent_HammerHit *pEvent = (CNetEvent_HammerHit *)m_Events.Create(NETEVENTTYPE_HAMMERHIT, sizeof(CNetEvent_HammerHit));
++	CNetEvent_HammerHit *pEvent = (CNetEvent_HammerHit *)m_Events.Create(NETEVENTTYPE_HAMMERHIT, sizeof(CNetEvent_HammerHit), Mask);
+ 	if(pEvent)
+ 	{
+ 		pEvent->m_X = (int)Pos.x;
+@@ -113,10 +113,10 @@ void CGameContext::CreateHammerHit(vec2 Pos)
+ }
+ 
+ 
+-void CGameContext::CreateExplosion(vec2 Pos, int Owner, int Weapon, bool NoDamage)
++void CGameContext::CreateExplosion(vec2 Pos, int Owner, int Weapon, bool NoDamage, int64_t Mask)
+ {
+ 	// create the event
+-	CNetEvent_Explosion *pEvent = (CNetEvent_Explosion *)m_Events.Create(NETEVENTTYPE_EXPLOSION, sizeof(CNetEvent_Explosion));
++	CNetEvent_Explosion *pEvent = (CNetEvent_Explosion *)m_Events.Create(NETEVENTTYPE_EXPLOSION, sizeof(CNetEvent_Explosion), Mask);
+ 	if(pEvent)
+ 	{
+ 		pEvent->m_X = (int)Pos.x;
+@@ -157,10 +157,10 @@ void create_smoke(vec2 Pos)
+ 	}
+ }*/
+ 
+-void CGameContext::CreatePlayerSpawn(vec2 Pos)
++void CGameContext::CreatePlayerSpawn(vec2 Pos, int64_t Mask)
+ {
+ 	// create the event
+-	CNetEvent_Spawn *ev = (CNetEvent_Spawn *)m_Events.Create(NETEVENTTYPE_SPAWN, sizeof(CNetEvent_Spawn));
++	CNetEvent_Spawn *ev = (CNetEvent_Spawn *)m_Events.Create(NETEVENTTYPE_SPAWN, sizeof(CNetEvent_Spawn), Mask);
+ 	if(ev)
+ 	{
+ 		ev->m_X = (int)Pos.x;
+@@ -168,10 +168,10 @@ void CGameContext::CreatePlayerSpawn(vec2 Pos)
+ 	}
+ }
+ 
+-void CGameContext::CreateDeath(vec2 Pos, int ClientID)
++void CGameContext::CreateDeath(vec2 Pos, int ClientID, int64_t Mask)
+ {
+ 	// create the event
+-	CNetEvent_Death *pEvent = (CNetEvent_Death *)m_Events.Create(NETEVENTTYPE_DEATH, sizeof(CNetEvent_Death));
++	CNetEvent_Death *pEvent = (CNetEvent_Death *)m_Events.Create(NETEVENTTYPE_DEATH, sizeof(CNetEvent_Death), Mask);
+ 	if(pEvent)
+ 	{
+ 		pEvent->m_X = (int)Pos.x;
+@@ -180,7 +180,7 @@ void CGameContext::CreateDeath(vec2 Pos, int ClientID)
+ 	}
+ }
+ 
+-void CGameContext::CreateSound(vec2 Pos, int Sound, int Mask)
++void CGameContext::CreateSound(vec2 Pos, int Sound, int64_t Mask)
+ {
+ 	if (Sound < 0)
+ 		return;
+@@ -731,6 +731,10 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
+ 					SendChatTarget(ClientID, "You can't kick yourself");
+ 					return;
+ 				}
++
++				if (!Server()->ReverseTranslate(KickID, ClientID))
++					return;
++
+ 				if(Server()->IsAuthed(KickID))
+ 				{
+ 					SendChatTarget(ClientID, "You can't kick admins");
+@@ -770,6 +774,8 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
+ 					SendChatTarget(ClientID, "You can't move yourself");
+ 					return;
+ 				}
++				if (!Server()->ReverseTranslate(SpectateID, ClientID))
++					return;
+ 
+ 				str_format(aChatmsg, sizeof(aChatmsg), "'%s' called for vote to move '%s' to spectators (%s)", Server()->ClientName(ClientID), Server()->ClientName(SpectateID), pReason);
+ 				str_format(aDesc, sizeof(aDesc), "move '%s' to spectators", Server()->ClientName(SpectateID));
+@@ -852,10 +858,16 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
+ 		{
+ 			CNetMsg_Cl_SetSpectatorMode *pMsg = (CNetMsg_Cl_SetSpectatorMode *)pRawMsg;
+ 
+-			if(pPlayer->GetTeam() != TEAM_SPECTATORS || pPlayer->m_SpectatorID == pMsg->m_SpectatorID || ClientID == pMsg->m_SpectatorID ||
+-				(g_Config.m_SvSpamprotection && pPlayer->m_LastSetSpectatorMode && pPlayer->m_LastSetSpectatorMode+Server()->TickSpeed()*3 > Server()->Tick()))
++			if(g_Config.m_SvSpamprotection && pPlayer->m_LastSetSpectatorMode && pPlayer->m_LastSetSpectatorMode+Server()->TickSpeed()*3 > Server()->Tick())
+ 				return;
+ 
++			if(pMsg->m_SpectatorID != SPEC_FREEVIEW)
++				if (!Server()->ReverseTranslate(pMsg->m_SpectatorID, ClientID))
++					return;
++
++			if(pPlayer->GetTeam() != TEAM_SPECTATORS || pPlayer->m_SpectatorID == pMsg->m_SpectatorID || ClientID == pMsg->m_SpectatorID)
++				return;
++			
+ 			pPlayer->m_LastSetSpectatorMode = Server()->Tick();
+ 			if(pMsg->m_SpectatorID != SPEC_FREEVIEW && (!m_apPlayers[pMsg->m_SpectatorID] || m_apPlayers[pMsg->m_SpectatorID]->GetTeam() == TEAM_SPECTATORS))
+ 				SendChatTarget(ClientID, "Invalid spectator id used");
+diff --git a/src/game/server/gamecontext.h b/src/game/server/gamecontext.h
+index 2ffb0ab403..6998210e7c 100644
+--- a/src/game/server/gamecontext.h
++++ b/src/game/server/gamecontext.h
+@@ -15,6 +15,15 @@
+ #include "gameworld.h"
+ #include "player.h"
+ 
++#ifdef _MSC_VER
++typedef __int32 int32_t;
++typedef unsigned __int32 uint32_t;
++typedef __int64 int64_t;
++typedef unsigned __int64 uint64_t;
++#else
++#include <stdint.h>
++#endif
++
+ /*
+ 	Tick
+ 		Game Context (CGameContext::tick)
+@@ -118,12 +127,12 @@ class CGameContext : public IGameServer
+ 	CVoteOptionServer *m_pVoteOptionLast;
+ 
+ 	// helper functions
+-	void CreateDamageInd(vec2 Pos, float AngleMod, int Amount);
+-	void CreateExplosion(vec2 Pos, int Owner, int Weapon, bool NoDamage);
+-	void CreateHammerHit(vec2 Pos);
+-	void CreatePlayerSpawn(vec2 Pos);
+-	void CreateDeath(vec2 Pos, int Who);
+-	void CreateSound(vec2 Pos, int Sound, int Mask=-1);
++	void CreateDamageInd(vec2 Pos, float AngleMod, int Amount, int64_t Mask=-1LL);
++	void CreateExplosion(vec2 Pos, int Owner, int Weapon, bool NoDamage, int64_t Mask=-1LL);
++	void CreateHammerHit(vec2 Pos, int64_t Mask=-1LL);
++	void CreatePlayerSpawn(vec2 Pos, int64_t Mask=-1LL);
++	void CreateDeath(vec2 Pos, int Who, int64_t Mask=-1LL);
++	void CreateSound(vec2 Pos, int Sound, int64_t Mask=-1LL);
+ 	void CreateSoundGlobal(int Sound, int Target=-1);
+ 
+ 
+@@ -176,8 +185,9 @@ class CGameContext : public IGameServer
+ 	virtual const char *NetVersion();
+ };
+ 
+-inline int CmaskAll() { return -1; }
+-inline int CmaskOne(int ClientID) { return 1<<ClientID; }
+-inline int CmaskAllExceptOne(int ClientID) { return 0x7fffffff^CmaskOne(ClientID); }
+-inline bool CmaskIsSet(int Mask, int ClientID) { return (Mask&CmaskOne(ClientID)) != 0; }
++inline int64_t CmaskAll() { return -1LL; }
++inline int64_t CmaskOne(int ClientID) { return 1LL<<ClientID; }
++inline int64_t CmaskAllExceptOne(int ClientID) { return CmaskAll()^CmaskOne(ClientID); }
++inline bool CmaskIsSet(int64_t Mask, int ClientID) { return (Mask&CmaskOne(ClientID)) != 0; }
++
+ #endif
+diff --git a/src/game/server/gamecontroller.h b/src/game/server/gamecontroller.h
+index 66ff1dca7a..3de65ee6da 100644
+--- a/src/game/server/gamecontroller.h
++++ b/src/game/server/gamecontroller.h
+@@ -5,6 +5,15 @@
+ 
+ #include <base/vmath.h>
+ 
++#ifdef _MSC_VER
++typedef __int32 int32_t;
++typedef unsigned __int32 uint32_t;
++typedef __int64 int64_t;
++typedef unsigned __int64 uint64_t;
++#else
++#include <stdint.h>
++#endif
++
+ /*
+ 	Class: Game Controller
+ 		Controls the main game logic. Keeping track of team and player score,
+diff --git a/src/game/server/gameworld.cpp b/src/game/server/gameworld.cpp
+index d803ae67b1..7356e081c1 100644
+--- a/src/game/server/gameworld.cpp
++++ b/src/game/server/gameworld.cpp
+@@ -5,6 +5,10 @@
+ #include "entity.h"
+ #include "gamecontext.h"
+ 
++#include <algorithm>
++#include <utility>
++#include <engine/shared/config.h>
++
+ //////////////////////////////////////////////////
+ // game world
+ //////////////////////////////////////////////////
+@@ -186,6 +190,8 @@ void CGameWorld::Tick()
+ 	}
+ 
+ 	RemoveEntities();
++
++	UpdatePlayerMaps();
+ }
+ 
+ 
+@@ -219,6 +225,87 @@ CCharacter *CGameWorld::IntersectCharacter(vec2 Pos0, vec2 Pos1, float Radius, v
+ 	return pClosest;
+ }
+ 
++bool distCompare(std::pair<float,int> a, std::pair<float,int> b)
++{
++	return (a.first < b.first);
++}
++
++void CGameWorld::UpdatePlayerMaps()
++{
++	if (Server()->Tick() % g_Config.m_SvMapUpdateRate != 0) return;
++
++	std::pair<float,int> dist[MAX_CLIENTS];
++	for (int i = 0; i < MAX_CLIENTS; i++)
++	{
++		if (!Server()->ClientIngame(i)) continue;
++		int* map = Server()->GetIdMap(i);
++
++		// compute distances
++		for (int j = 0; j < MAX_CLIENTS; j++)
++		{
++			dist[j].second = j;
++			dist[j].first = 1e10;
++			if (!Server()->ClientIngame(j))
++				continue;
++			/*CCharacter* ch = GameServer()->m_apPlayers[j]->GetCharacter();
++			if (!ch)
++				continue;
++			// copypasted chunk from character.cpp Snap() follows
++			int SnappingClient = i;
++			CCharacter* SnapChar = GameServer()->GetPlayerChar(SnappingClient);
++			if(SnapChar &&
++				GameServer()->m_apPlayers[SnappingClient]->GetTeam() != -1 &&
++				!ch->CanCollide(SnappingClient) &&
++				(!GameServer()->m_apPlayers[SnappingClient]->m_IsUsingDDRaceClient ||
++					(GameServer()->m_apPlayers[SnappingClient]->m_IsUsingDDRaceClient &&
++					!GameServer()->m_apPlayers[SnappingClient]->m_ShowOthers
++                                	)
++				)
++                        ) continue;*/
++
++			dist[j].first = distance(GameServer()->m_apPlayers[i]->m_ViewPos, GameServer()->m_apPlayers[j]->m_ViewPos);
++		}
++
++		// always send the player himself
++		dist[i].first = 0;
++
++		// compute reverse map
++		int rMap[MAX_CLIENTS];
++		for (int j = 0; j < MAX_CLIENTS; j++)
++		{
++			rMap[j] = -1;
++		}
++		for (int j = 0; j < VANILLA_MAX_CLIENTS; j++)
++		{
++			if (map[j] == -1) continue;
++			if (dist[map[j]].first > 1e9) map[j] = -1;
++			else rMap[map[j]] = j;
++		}
++
++		std::nth_element(&dist[0], &dist[VANILLA_MAX_CLIENTS - 1], &dist[MAX_CLIENTS], distCompare);
++
++		int mapc = 0;
++		int demand = 0;
++		for (int j = 0; j < VANILLA_MAX_CLIENTS - 1; j++)
++		{
++			int k = dist[j].second;
++			if (rMap[k] != -1 || dist[j].first > 1e9) continue;
++			while (mapc < VANILLA_MAX_CLIENTS && map[mapc] != -1) mapc++;
++			if (mapc < VANILLA_MAX_CLIENTS - 1)
++				map[mapc] = k;
++			else
++				if (dist[j].first < 1300) // dont bother freeing up space for players which are too far to be displayed anyway
++					demand++;
++		}
++		for (int j = MAX_CLIENTS - 1; j > VANILLA_MAX_CLIENTS - 2; j--)
++		{
++			int k = dist[j].second;
++			if (rMap[k] != -1 && demand-- > 0)
++				map[rMap[k]] = -1;
++		}
++		map[VANILLA_MAX_CLIENTS - 1] = -1; // player with empty name to say chat msgs
++	}
++}
+ 
+ CCharacter *CGameWorld::ClosestCharacter(vec2 Pos, float Radius, CEntity *pNotThis)
+ {
+diff --git a/src/game/server/gameworld.h b/src/game/server/gameworld.h
+index a2fdbce069..39b209722d 100644
+--- a/src/game/server/gameworld.h
++++ b/src/game/server/gameworld.h
+@@ -39,6 +39,8 @@ class CGameWorld
+ public:
+ 	class CGameContext *GameServer() { return m_pGameServer; }
+ 	class IServer *Server() { return m_pServer; }
++	
++	void UpdatePlayerMaps();
+ 
+ 	bool m_ResetRequested;
+ 	bool m_Paused;
+diff --git a/src/game/server/player.cpp b/src/game/server/player.cpp
+index 4b37385f36..5ff68ab686 100644
+--- a/src/game/server/player.cpp
++++ b/src/game/server/player.cpp
+@@ -21,6 +21,13 @@ CPlayer::CPlayer(CGameContext *pGameServer, int ClientID, int Team)
+ 	m_SpectatorID = SPEC_FREEVIEW;
+ 	m_LastActionTick = Server()->Tick();
+ 	m_TeamChangeTick = Server()->Tick();
++
++	int* idMap = Server()->GetIdMap(ClientID);
++	for (int i = 1;i < VANILLA_MAX_CLIENTS;i++)
++	{
++	    idMap[i] = -1;
++	}
++	idMap[0] = ClientID;
+ }
+ 
+ CPlayer::~CPlayer()
+@@ -118,7 +125,10 @@ void CPlayer::Snap(int SnappingClient)
+ 	if(!Server()->ClientIngame(m_ClientID))
+ 		return;
+ 
+-	CNetObj_ClientInfo *pClientInfo = static_cast<CNetObj_ClientInfo *>(Server()->SnapNewItem(NETOBJTYPE_CLIENTINFO, m_ClientID, sizeof(CNetObj_ClientInfo)));
++	int id = m_ClientID;
++	if (!Server()->Translate(id, SnappingClient)) return;
++
++	CNetObj_ClientInfo *pClientInfo = static_cast<CNetObj_ClientInfo *>(Server()->SnapNewItem(NETOBJTYPE_CLIENTINFO, id, sizeof(CNetObj_ClientInfo)));
+ 	if(!pClientInfo)
+ 		return;
+ 
+@@ -130,13 +140,13 @@ void CPlayer::Snap(int SnappingClient)
+ 	pClientInfo->m_ColorBody = m_TeeInfos.m_ColorBody;
+ 	pClientInfo->m_ColorFeet = m_TeeInfos.m_ColorFeet;
+ 
+-	CNetObj_PlayerInfo *pPlayerInfo = static_cast<CNetObj_PlayerInfo *>(Server()->SnapNewItem(NETOBJTYPE_PLAYERINFO, m_ClientID, sizeof(CNetObj_PlayerInfo)));
++	CNetObj_PlayerInfo *pPlayerInfo = static_cast<CNetObj_PlayerInfo *>(Server()->SnapNewItem(NETOBJTYPE_PLAYERINFO, id, sizeof(CNetObj_PlayerInfo)));
+ 	if(!pPlayerInfo)
+ 		return;
+ 
+ 	pPlayerInfo->m_Latency = SnappingClient == -1 ? m_Latency.m_Min : GameServer()->m_apPlayers[SnappingClient]->m_aActLatency[m_ClientID];
+ 	pPlayerInfo->m_Local = 0;
+-	pPlayerInfo->m_ClientID = m_ClientID;
++	pPlayerInfo->m_ClientID = id;
+ 	pPlayerInfo->m_Score = m_Score;
+ 	pPlayerInfo->m_Team = m_Team;
+ 
+@@ -155,6 +165,25 @@ void CPlayer::Snap(int SnappingClient)
+ 	}
+ }
+ 
++void CPlayer::FakeSnap(int SnappingClient)
++{
++	IServer::CClientInfo info;
++	Server()->GetClientInfo(SnappingClient, &info);
++	if (info.m_CustClt)
++		return;
++
++	int id = VANILLA_MAX_CLIENTS - 1;
++
++	CNetObj_ClientInfo *pClientInfo = static_cast<CNetObj_ClientInfo *>(Server()->SnapNewItem(NETOBJTYPE_CLIENTINFO, id, sizeof(CNetObj_ClientInfo)));
++
++	if(!pClientInfo)
++		return;
++
++	StrToInts(&pClientInfo->m_Name0, 4, " ");
++	StrToInts(&pClientInfo->m_Clan0, 3, Server()->ClientClan(m_ClientID));
++	StrToInts(&pClientInfo->m_Skin0, 6, m_TeeInfos.m_SkinName);
++}
++
+ void CPlayer::OnDisconnect(const char *pReason)
+ {
+ 	KillCharacter();
+diff --git a/src/game/server/player.h b/src/game/server/player.h
+index dd804a957f..65225b0f0b 100644
+--- a/src/game/server/player.h
++++ b/src/game/server/player.h
+@@ -28,6 +28,8 @@ class CPlayer
+ 	void PostTick();
+ 	void Snap(int SnappingClient);
+ 
++	void FakeSnap(int SnappingClient);
++	
+ 	void OnDirectInput(CNetObj_PlayerInput *NewInput);
+ 	void OnPredictedInput(CNetObj_PlayerInput *NewInput);
+ 	void OnDisconnect(const char *pReason);
+diff --git a/src/game/variables.h b/src/game/variables.h
+index 1cc329a996..f211e21880 100644
+--- a/src/game/variables.h
++++ b/src/game/variables.h
+@@ -91,4 +91,7 @@ MACRO_CONFIG_INT(SvVoteKickBantime, sv_vote_kick_bantime, 5, 0, 1440, CFGFLAG_SE
+ 
+ MACRO_CONFIG_INT(DbgFocus, dbg_focus, 0, 0, 1, CFGFLAG_CLIENT, "")
+ MACRO_CONFIG_INT(DbgTuning, dbg_tuning, 0, 0, 1, CFGFLAG_CLIENT, "")
++
++MACRO_CONFIG_INT(SvMapUpdateRate, sv_mapupdaterate, 5, 1, 100, CFGFLAG_SERVER, "(Tw32) real id <-> vanilla id players map update rate")
++
+ #endif
+diff --git a/src/game/version.h b/src/game/version.h
+index 1d386cad84..aaec4cecb2 100644
+--- a/src/game/version.h
++++ b/src/game/version.h
+@@ -1,9 +1,19 @@
+ /* (c) Magnus Auvinen. See licence.txt in the root of the distribution for more information. */
+ /* If you are missing that file, acquire a complete release at teeworlds.com.                */
++
++/*#ifndef GAME_VERSION_H
++#define GAME_VERSION_H
++#include "generated/nethash.cpp"
++#define GAME_VERSION "0.6.1"
++#define GAME_NETVERSION "0.6 " GAME_NETVERSION_HASH
++#endif*/
++
+ #ifndef GAME_VERSION_H
+ #define GAME_VERSION_H
++#ifndef NON_HASED_VERSION
+ #include "generated/nethash.cpp"
+ #define GAME_VERSION "0.6.4"
+-#define GAME_NETVERSION "0.6 " GAME_NETVERSION_HASH
++#define GAME_NETVERSION "0.6 626fce9a778df4d4" //the std game version
+ static const char GAME_RELEASE_VERSION[8] = {'0', '.', '6', '.', '4', 0};
+ #endif
++#endif
+diff --git a/src/mastersrv/mastersrv.h b/src/mastersrv/mastersrv.h
+index 38e5ab2779..ae9a0c2afc 100644
+--- a/src/mastersrv/mastersrv.h
++++ b/src/mastersrv/mastersrv.h
+@@ -28,6 +28,9 @@ static const unsigned char SERVERBROWSE_COUNT[] = {255, 255, 255, 255, 's', 'i',
+ static const unsigned char SERVERBROWSE_GETINFO[] = {255, 255, 255, 255, 'g', 'i', 'e', '3'};
+ static const unsigned char SERVERBROWSE_INFO[] = {255, 255, 255, 255, 'i', 'n', 'f', '3'};
+ 
++static const unsigned char SERVERBROWSE_GETINFO64[] = {255, 255, 255, 255, 'f', 's', 't', 'd'};
++static const unsigned char SERVERBROWSE_INFO64[] = {255, 255, 255, 255, 'd', 't', 's', 'f'};
++
+ static const unsigned char SERVERBROWSE_FWCHECK[] = {255, 255, 255, 255, 'f', 'w', '?', '?'};
+ static const unsigned char SERVERBROWSE_FWRESPONSE[] = {255, 255, 255, 255, 'f', 'w', '!', '!'};
+ static const unsigned char SERVERBROWSE_FWOK[] = {255, 255, 255, 255, 'f', 'w', 'o', 'k'};
