@@ -31,11 +31,11 @@ void CGameControllerInfection::DoWincheck() {
             Humans ++;
     }
 
-    if (Humans + Zombies < 2) {
+    if (Humans + Zombies < 3) {
         m_SuddenDeath = true;
         m_Warmup = 0;
         if(Server()->Tick()%50 == 0)
-            GameServer()->SendBroadcast("At least 2 players required to start playing", -1);
+            GameServer()->SendBroadcast("At least 3 players required to start playing", -1);
         return;
     } else if (m_SuddenDeath) {
         StartRound();

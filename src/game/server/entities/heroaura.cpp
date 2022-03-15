@@ -3,6 +3,7 @@
 #include <game/generated/protocol.h>
 #include <game/server/gamecontext.h>
 #include "heroaura.h"
+#include <base/math.h>
 
 CAura::CAura(CGameWorld *pGameWorld, int Owner, float StartDegres, int Distance, int Type)
 	: CEntity(pGameWorld, CGameWorld::ENTTYPE_PICKUP)
@@ -22,7 +23,7 @@ void CAura::Tick()
 	if(!pOwnerChar)
 		return;
 
-	m_Pos = pOwnerChar->m_Pos + (GetDir(m_Degres*M_PIl/180) * m_Distance);
+	m_Pos = pOwnerChar->m_Pos + (GetDir(m_Degres*M_PI/180) * m_Distance);
 	if ( m_Degres + 5 < 360 )
 		m_Degres += 5;
 	else

@@ -726,7 +726,9 @@ void CGameContext::OnMessage(int MsgID, CUnpacker *pUnpacker, int ClientID)
 			if(pMsg->m_pMessage[0] == '/')
             {
                 ExecuteCommand(ClientID, pMsg->m_pMessage);
-            }
+            }else{
+				SendChat(ClientID, Team, pMsg->m_pMessage);
+			}
 		}
 		else if(MsgID == NETMSGTYPE_CL_CALLVOTE)
 		{

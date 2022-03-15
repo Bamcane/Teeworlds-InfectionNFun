@@ -592,7 +592,8 @@ void CCharacter::ResetInput()
 }
 
 void CCharacter::Tick()
-{
+{	
+	
 	if(m_pPlayer->m_ForceBalanced)
 	{
 		char Buf[128];
@@ -646,6 +647,20 @@ void CCharacter::Tick()
 			{
 				for ( int i = 0; i < 12; i++ )
 					m_AuraProtect[i] = new CAura(&(GameServer()->m_World), m_pPlayer->GetCID(), i * 30, 60, POWERUP_ARMOR);
+			}
+		}
+	}
+
+	// TELEPORTER
+	for(int id = 0; id < MAX_CLIENTS; id++)
+	{
+		if(GameServer()->m_apPlayers[id] && GameServer()->m_apPlayers[id]->GetCharacter())
+		{
+			vec2 Dest = GameServer()->Collision()->Teleport(GameServer()->m_apPlayers[id]->GetCharacter()->GetPos().x, GameServer()->m_apPlayers[id]->GetCharacter()->GetPos().y);
+			if(Dest.x >= 0 && Dest.y >= 0)
+			{
+				GameServer()->m_apPlayers[id]->GetCharacter()->m_Core.m_Pos = Dest;
+				GameServer()->m_apPlayers[id]->GetCharacter()->m_Core.m_Vel = vec2(0, 0);
 			}
 		}
 	}
